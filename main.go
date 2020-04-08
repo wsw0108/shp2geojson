@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 
@@ -11,8 +13,33 @@ import (
 	"github.com/paulmach/orb/geojson"
 )
 
+var (
+	input    string
+	output   string
+	encoding string
+	ndjson   bool
+	pretty   bool
+)
+
+func init() {
+	flag.StringVar(&input, "i", "", "input shapefile")
+	flag.StringVar(&output, "o", "-", "output geojson file")
+	flag.StringVar(&encoding, "e", "", "encoding of dbf")
+	flag.BoolVar(&ndjson, "ndjson", false, "output as ndjson")
+	flag.BoolVar(&pretty, "pretty", false, "pretty, no effect when output as ndjson")
+	flag.Parse()
+}
+
 func main() {
-	reader, err := shp.Open(os.Args[1])
+	if input == "" {
+		flag.Usage()
+		os.Exit(1)
+	}
+	var options []shp.OptionFunc
+	if encoding != "" {
+		options = append(options, shp.WithDbfEncoding(encoding))
+	}
+	reader, err := shp.Open(input, options...)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -29,11 +56,33 @@ func main() {
 		}
 		collection.Features = append(collection.Features, ShapeToFeature(shape, attrs))
 	}
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(collection); err != nil {
+	out, err := getOutput(output)
+	if err != nil {
 		log.Fatalln(err)
 	}
+	defer out.Close()
+	encoder := json.NewEncoder(out)
+	if !ndjson {
+		if pretty {
+			encoder.SetIndent("", "  ")
+		}
+		if err := encoder.Encode(collection); err != nil {
+			log.Fatalln(err)
+		}
+	} else {
+		for _, feature := range collection.Features {
+			encoder.Encode(feature)
+		}
+	}
+}
+
+func getOutput(output string) (out io.WriteCloser, err error) {
+	if output == "" || output == "-" {
+		out = os.Stdout
+		return
+	}
+	out, err = os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	return
 }
 
 func ShapeToFeature(shape shp.Shape, attrs []shp.Attribute) *geojson.Feature {
